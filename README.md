@@ -4,6 +4,18 @@ A small **end-to-end** demo: pull **NSE** daily prices with **yfinance**, clean 
 
 > This is a learning/demo project. Prices and any “ML” output are **not** investment advice.
 
+## Tech stack
+
+| Layer | Choice |
+| --- | --- |
+| **Language** | Python |
+| **Backend** | FastAPI (REST + OpenAPI/Swagger) |
+| **Database** | SQLite (file `data_store/stocks.db`; PostgreSQL can be used as a drop-in alternative with schema migration if needed) |
+| **Data / ML** | Pandas, NumPy, scikit-learn (linear regression demo), **yfinance** for market data (uses HTTP under the hood) |
+| **Frontend (bonus)** | HTML + static **Chart.js** (`static/`) |
+
+No Docker — run locally with Python + `venv` (see Quick start below).
+
 ## What this project does
 
 ### Data collection and preparation
@@ -58,14 +70,6 @@ uvicorn main:app --reload --host 127.0.0.1 --port 8000
 
 **First boot note:** if `data_store/stocks.db` is missing/empty, the app **downloads and ingests** all default tickers on startup (typically ~1–3 minutes depending on network).
 
-## Docker
-
-```bash
-docker compose up --build
-```
-
-Then open `http://127.0.0.1:8000/docs`.
-
 ## Postman
 
 Import `postman_collection.json` and set `base` to your server URL.
@@ -78,7 +82,7 @@ Import `postman_collection.json` and set `base` to your server URL.
 - `database.py` — SQLite schema
 - `ml_predict.py` — simple regression helper
 - `static/` — dashboard assets
-- `Dockerfile`, `docker-compose.yml`
+- `yf_client.py` — throttled yfinance fetches with retries
 
 ## Ideas for “insights” you can mention in your write-up
 
