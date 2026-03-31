@@ -3,15 +3,36 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta
+from typing import Any
 
 import pandas as pd
 import yfinance as yf
 
-from config import DEFAULT_NSE_SYMBOLS, EXCHANGE_SUFFIX
+from config import (
+    DEFAULT_NSE_SYMBOLS,
+    EXCHANGE_SUFFIX,
+    YF_BATCH_PAUSE_SEC,
+    YF_BATCH_SIZE,
+    YF_MIN_BARS_SKIP_SEED,
+)
 from data_processor import add_metrics, clean_ohlcv
 from database import get_connection
+from yf_client import (
+    company_name_from_ticker,
+    fetch_history_with_retry,
+    sleep_between_batches,
+    sleep_between_symbols,
+)
 
 logger = logging.getLogger(__name__)
+
+# Last seed run summary (for /health and ops)
+LAST_SEED_RESULT: dict[str, Any] = {
+    "status": "idle",
+    "ingested_ok": 0,
+    "skipped_db": 0,
+    "failed": [],
+}
 
 
 def to_yfinance_symbol(symbol: str) -> str:
@@ -23,21 +44,20 @@ def from_yfinance_symbol(yf_symbol: str) -> str:
     return yf_symbol.replace(EXCHANGE_SUFFIX, "").upper()
 
 
-def fetch_history(yf_symbol: str, period: str = "2y") -> pd.DataFrame:
-    ticker = yf.Ticker(yf_symbol)
-    df = ticker.history(period=period, auto_adjust=True, repair=True)
-    if df.empty:
-        logger.warning("No data returned for %s", yf_symbol)
-        return df
-    if isinstance(df.columns, pd.MultiIndex):
-        df.columns = df.columns.get_level_values(0)
-    return df
+def count_bars_for_symbol(display_symbol: str) -> int:
+    yf_sym = to_yfinance_symbol(display_symbol)
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) AS c FROM stock_bars WHERE symbol = ?",
+            (yf_sym,),
+        ).fetchone()
+    return int(row["c"]) if row else 0
 
 
 def ingest_symbol(display_symbol: str) -> int:
     """Download, clean, compute metrics, upsert rows. Returns row count."""
     yf_sym = to_yfinance_symbol(display_symbol)
-    raw = fetch_history(yf_sym)
+    raw = fetch_history_with_retry(yf_sym)
     if raw.empty:
         return 0
 
@@ -47,8 +67,7 @@ def ingest_symbol(display_symbol: str) -> int:
 
     enriched = add_metrics(cleaned)
     ticker = yf.Ticker(yf_sym)
-    info = ticker.info or {}
-    long_name = info.get("longName") or info.get("shortName") or display_symbol
+    long_name = company_name_from_ticker(ticker, display_symbol)
 
     rows = 0
     with get_connection() as conn:
@@ -108,13 +127,90 @@ def ingest_symbol(display_symbol: str) -> int:
     return rows
 
 
+def _run_ingest_safe(display_symbol: str) -> tuple[int, bool]:
+    """Returns (rows, ok). Never raises."""
+    try:
+        n = ingest_symbol(display_symbol)
+        return n, n > 0
+    except Exception as e:
+        logger.warning("Ingest failed for %s: %s", display_symbol, e)
+        return 0, False
+
+
 def seed_default_universe() -> None:
+    """
+    Ingest default NSE list with throttling, batching, retries, and a final retry pass.
+    Skips symbols that already have enough rows in DB. One failure does not stop others.
+    """
+    global LAST_SEED_RESULT
+
+    pending: list[str] = []
+    skipped_db = 0
     for sym in DEFAULT_NSE_SYMBOLS:
-        try:
-            n = ingest_symbol(sym)
-            logger.info("Ingested %s: %s rows", sym, n)
-        except Exception as e:
-            logger.exception("Failed to ingest %s: %s", sym, e)
+        if count_bars_for_symbol(sym) >= YF_MIN_BARS_SKIP_SEED:
+            skipped_db += 1
+            logger.info("Seed skip %s — already have >= %s bars in DB", sym, YF_MIN_BARS_SKIP_SEED)
+        else:
+            pending.append(sym)
+
+    if not pending:
+        LAST_SEED_RESULT = {
+            "status": "done",
+            "ingested_ok": 0,
+            "skipped_db": skipped_db,
+            "failed": [],
+        }
+        logger.info("Seed: nothing to fetch (all symbols skipped or empty list).")
+        return
+
+    LAST_SEED_RESULT = {
+        "status": "running",
+        "ingested_ok": 0,
+        "skipped_db": skipped_db,
+        "failed": [],
+    }
+
+    failed: list[str] = []
+    ok_count = 0
+    batch = max(1, YF_BATCH_SIZE)
+
+    def process_list(symbols: list[str], phase: str) -> None:
+        nonlocal ok_count, failed
+        for i, sym in enumerate(symbols):
+            if i > 0:
+                if i % batch == 0:
+                    sleep_between_batches(YF_BATCH_PAUSE_SEC)
+                else:
+                    sleep_between_symbols()
+            n, success = _run_ingest_safe(sym)
+            if success:
+                ok_count += 1
+                LAST_SEED_RESULT["ingested_ok"] = ok_count
+                logger.info("[%s] Ingested %s: %s rows", phase, sym, n)
+            else:
+                if sym not in failed:
+                    failed.append(sym)
+                logger.error("[%s] Failed or empty ingest for %s", phase, sym)
+
+    process_list(pending, "phase1")
+
+    if failed:
+        logger.warning("Retrying %s symbols after cooldown: %s", len(failed), failed)
+        sleep_between_batches(max(YF_BATCH_PAUSE_SEC, 8.0))
+        retry_syms = failed[:]
+        failed = []
+        process_list(retry_syms, "retry")
+
+    LAST_SEED_RESULT = {
+        "status": "done",
+        "ingested_ok": ok_count,
+        "skipped_db": skipped_db,
+        "failed": failed,
+    }
+    if failed:
+        logger.error("Seed finished with unresolved failures: %s", failed)
+    else:
+        logger.info("Seed finished: ok=%s skipped_db=%s", ok_count, skipped_db)
 
 
 def load_bars_dataframe(symbol: str, start: datetime | None = None) -> pd.DataFrame:

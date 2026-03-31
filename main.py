@@ -10,14 +10,22 @@ from datetime import date, datetime, timedelta
 from typing import Any
 
 import pandas as pd
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from cache_utils import api_cache, cached
 from config import BASE_DIR
-from data_service import correlation_between, from_yfinance_symbol, ingest_symbol, load_bars_dataframe, seed_default_universe, to_yfinance_symbol
+from data_service import (
+    LAST_SEED_RESULT,
+    correlation_between,
+    from_yfinance_symbol,
+    ingest_symbol,
+    load_bars_dataframe,
+    seed_default_universe,
+    to_yfinance_symbol,
+)
 from database import get_connection, init_db, row_to_dict
 from ml_predict import predict_next_closes
 
@@ -48,10 +56,24 @@ def _count_bars() -> int:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+    app.state.seeding = False
+    seed_task: asyncio.Task | None = None
     if _count_bars() == 0:
-        logger.info("Database empty — seeding NSE universe (may take 1–2 minutes)...")
-        await asyncio.to_thread(seed_default_universe)
+        logger.info(
+            "Database empty — seeding NSE universe in background (throttled; may take several minutes)..."
+        )
+        app.state.seeding = True
+
+        async def seed_job() -> None:
+            try:
+                await asyncio.to_thread(seed_default_universe)
+            finally:
+                app.state.seeding = False
+
+        seed_task = asyncio.create_task(seed_job())
     yield
+    if seed_task is not None:
+        await seed_task
     api_cache.clear()
 
 
@@ -72,8 +94,13 @@ app.add_middleware(
 
 
 @app.get("/health")
-def health():
-    return {"status": "ok", "bars": _count_bars()}
+def health(request: Request):
+    return {
+        "status": "ok",
+        "bars": _count_bars(),
+        "seeding": getattr(request.app.state, "seeding", False),
+        "seed": LAST_SEED_RESULT,
+    }
 
 
 @app.get("/companies", tags=["companies"])
