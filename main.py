@@ -6,7 +6,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from contextlib import asynccontextmanager
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 
 import pandas as pd
@@ -238,18 +238,49 @@ def top_movers(days: int = Query(30, ge=1, le=90)):
 
 @app.get("/predict/{symbol}", tags=["ml"])
 def predict_price(symbol: str, days: int = Query(60, ge=20, le=365)):
-    """Simple linear regression trend line + short extrapolation (demo, not financial advice)."""
+    """Linear regression on pre-April history; extrapolate April + May business days (demo, not financial advice)."""
     df = load_bars_dataframe(symbol)
     if df.empty:
         raise HTTPException(404, f"No data for {symbol}")
-    df = df.sort_values("bar_date").tail(days)
-    closes = df["close"].astype(float).values
-    fitted, future = predict_next_closes(closes, horizon=5)
+    df = df.sort_values("bar_date")
+    df["bar_date"] = pd.to_datetime(df["bar_date"]).dt.normalize()
+
+    year = date.today().year
+    april_start = pd.Timestamp(year=year, month=4, day=1)
+    april_end = pd.Timestamp(year=year, month=4, day=30)
+    may_start = pd.Timestamp(year=year, month=5, day=1)
+    may_end = pd.Timestamp(year=year, month=5, day=31)
+    april_bdays = pd.bdate_range(april_start, april_end)
+    may_bdays = pd.bdate_range(may_start, may_end)
+    n_apr, n_may = len(april_bdays), len(may_bdays)
+    horizon = n_apr + n_may
+
+    train_df = df[df["bar_date"] < april_start].tail(days)
+    if len(train_df) < 5:
+        raise HTTPException(
+            400,
+            f"Need at least 5 daily bars before April {year}; got {len(train_df)}. Try more history or refresh data.",
+        )
+
+    closes = train_df["close"].astype(float).values
+    fitted, future = predict_next_closes(closes, horizon=horizon)
+    training_dates = [pd.Timestamp(d).strftime("%Y-%m-%d") for d in train_df["bar_date"]]
+    april_dates = [d.strftime("%Y-%m-%d") for d in april_bdays]
+    may_dates = [d.strftime("%Y-%m-%d") for d in may_bdays]
+    pred_apr = future[:n_apr]
+    pred_may = future[n_apr:]
+
     return {
         "symbol": from_yfinance_symbol(_resolve_yf_symbol(symbol)),
         "method": "sklearn LinearRegression on time index vs close",
+        "train_before": f"{year}-04-01",
+        "predict_year": year,
         "fitted_close": fitted,
-        "predicted_next_5_closes": future,
+        "training_dates": training_dates,
+        "april_dates": april_dates,
+        "may_dates": may_dates,
+        "predicted_april_closes": pred_apr,
+        "predicted_may_closes": pred_may,
         "disclaimer": "Educational demo only — not investment advice.",
     }
 

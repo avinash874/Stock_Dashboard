@@ -28,7 +28,7 @@ Interactive docs: run the server and open `/docs`.
 | `GET /summary/{symbol}` | 52-week high/low (from latest rolling metrics), average close, last close, latest volatility |
 | `GET /compare?symbol1=INFY&symbol2=TCS&days=90` | Normalized performance + **return correlation** (custom insight) |
 | `GET /top-movers?days=30` | Simple gainers/losers over the window |
-| `GET /predict/{symbol}?days=60` | **Bonus**: sklearn `LinearRegression` trend + 5-step extrapolation (demo only) |
+| `GET /predict/{symbol}?days=60` | **Bonus**: sklearn `LinearRegression` on pre-April bars + Apr + May (business-day) forecast (demo only) |
 | `POST /admin/refresh/{symbol}` | Re-download one symbol (clears the tiny API cache) |
 
 **Caching:** responses for `/companies` and `/summary/{symbol}` are cached in-memory for `CACHE_TTL_SECONDS` (default **120s**) to reduce repeated heavy reads.

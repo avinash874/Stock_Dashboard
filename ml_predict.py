@@ -10,7 +10,7 @@ def predict_next_closes(
     closes: np.ndarray, horizon: int = 5
 ) -> tuple[list[float], list[float]]:
     """
-    Fit linear regression on time index vs close; extrapolate `horizon` days.
+    Fit linear regression on time index vs close; extrapolate `horizon` steps (e.g. April business days).
     Returns (historical_fitted_line, future_predicted).
     """
     y = np.asarray(closes, dtype=float)
