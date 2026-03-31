@@ -1,0 +1,51 @@
+{
+  "info": {
+    "name": "Stock Data Intelligence API",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "GET /companies",
+      "request": {
+        "method": "GET",
+        "url": "{{base}}/companies"
+      }
+    },
+    {
+      "name": "GET /data/{symbol}",
+      "request": {
+        "method": "GET",
+        "url": "{{base}}/data/INFY?days=30"
+      }
+    },
+    {
+      "name": "GET /summary/{symbol}",
+      "request": {
+        "method": "GET",
+        "url": "{{base}}/summary/TCS"
+      }
+    },
+    {
+      "name": "GET /compare",
+      "request": {
+        "method": "GET",
+        "url": "{{base}}/compare?symbol1=INFY&symbol2=TCS&days=90"
+      }
+    },
+    {
+      "name": "GET /top-movers",
+      "request": {
+        "method": "GET",
+        "url": "{{base}}/top-movers?days=30"
+      }
+    },
+    {
+      "name": "GET /predict/{symbol}",
+      "request": {
+        "method": "GET",
+        "url": "{{base}}/predict/RELIANCE?days=60"
+      }
+    }
+  ],
+  "variable": [{ "key": "base", "value": "http://127.0.0.1:8000" }]
+}
