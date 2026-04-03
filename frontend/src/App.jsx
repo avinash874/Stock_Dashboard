@@ -30,7 +30,7 @@ const docsUrl = apiBase ? `${apiBase}/docs` : "/docs";
 
 // Public URL of this UI (footer link). Not the API URL.
 const LIVE_APP_URL =
-  import.meta.env.VITE_APP_LIVE_URL ?? "https://stock-dashboard-tawny-nine.vercel.app";
+  import.meta.env.VITE_APP_LIVE_URL ?? "https://stock-dashboard-1-0qoi.onrender.com/";
 
 async function fetchJSON(path) {
   const url = `${apiBase}${path}`;
