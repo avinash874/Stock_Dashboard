@@ -30,6 +30,8 @@ from data_service import (
 from database import get_connection, init_db, row_to_dict
 from ml_predict import predict_next_closes
 
+# -------------------- Logging --------------------
+
 
 # -------------------- Logging --------------------
 logging.basicConfig(level=logging.INFO)
@@ -37,6 +39,7 @@ logger = logging.getLogger(__name__)
 
 STATIC_DIR = BASE_DIR / "static"
 
+# -------------------- Helper Functions --------------------
 
 # -------------------- Helper Functions --------------------
 
@@ -61,8 +64,6 @@ def get_total_bars() -> int:
         return int(row["count"]) if row else 0
 
 
-# -------------------- App Lifespan --------------------
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Runs at startup and shutdown."""
@@ -70,11 +71,10 @@ async def lifespan(app: FastAPI):
 
     app.state.seeding = False
     seed_task: asyncio.Task | None = None
-
-    # Seed data if DB is empty
-    if get_total_bars() == 0:
-        logger.info("Database empty → Seeding stock data...")
-
+    if _count_bars() == 0:
+        logger.info(
+            "Database empty — seeding NSE universe in background (throttled; may take several minutes)..."
+        )
         app.state.seeding = True
 
         async def seed_job():
@@ -86,15 +86,11 @@ async def lifespan(app: FastAPI):
         seed_task = asyncio.create_task(seed_job())
 
     yield
-
-    # Cleanup on shutdown
-    if seed_task:
+    if seed_task is not None:
         await seed_task
 
     api_cache.clear()
 
-
-# -------------------- FastAPI App --------------------
 
 app = FastAPI(
     title="Stock Data Intelligence API",
@@ -102,9 +98,6 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan,
 )
-
-
-# -------------------- Middleware --------------------
 
 app.add_middleware(
     CORSMiddleware,
@@ -114,8 +107,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
-# -------------------- APIs --------------------
 
 @app.get("/health")
 def health_check(request: Request):
@@ -129,8 +120,12 @@ def health_check(request: Request):
 
 @app.get("/companies", tags=["companies"])
 def list_companies():
-    """Get all available companies."""
-    return cached("companies", lambda: {"companies": get_all_companies()})
+    """List all available companies (from ingested universe)."""
+
+    def load():
+        return {"companies": _company_rows()}
+
+    return cached("companies", load)
 
 
 @app.get("/data/{symbol}", tags=["data"])
