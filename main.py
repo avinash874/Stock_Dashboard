@@ -1,6 +1,7 @@
 """
-Stock Data Intelligence Dashboard — FastAPI backend.
+Stock Data Intelligence Dashboard — FastAPI backend
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -29,60 +30,81 @@ from data_service import (
 from database import get_connection, init_db, row_to_dict
 from ml_predict import predict_next_closes
 
+
+# -------------------- Logging --------------------
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 STATIC_DIR = BASE_DIR / "static"
 
 
-def _resolve_yf_symbol(symbol: str) -> str:
+# -------------------- Helper Functions --------------------
+
+def resolve_symbol(symbol: str) -> str:
+    """Convert symbol to yfinance format."""
     return to_yfinance_symbol(symbol)
 
 
-def _company_rows() -> list[dict[str, Any]]:
+def get_all_companies() -> list[dict[str, Any]]:
+    """Fetch all companies from database."""
     with get_connection() as conn:
-        cur = conn.execute(
+        result = conn.execute(
             "SELECT symbol, display_symbol, name, exchange FROM companies ORDER BY display_symbol"
         )
-        return [row_to_dict(r) for r in cur.fetchall()]
+        return [row_to_dict(row) for row in result.fetchall()]
 
 
-def _count_bars() -> int:
+def get_total_bars() -> int:
+    """Count total stock records."""
     with get_connection() as conn:
-        row = conn.execute("SELECT COUNT(*) AS c FROM stock_bars").fetchone()
-        return int(row["c"]) if row else 0
+        row = conn.execute("SELECT COUNT(*) AS count FROM stock_bars").fetchone()
+        return int(row["count"]) if row else 0
 
+
+# -------------------- App Lifespan --------------------
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    """Runs at startup and shutdown."""
     init_db()
+
     app.state.seeding = False
     seed_task: asyncio.Task | None = None
-    if _count_bars() == 0:
-        logger.info(
-            "Database empty — seeding NSE universe in background (throttled; may take several minutes)..."
-        )
+
+    # Seed data if DB is empty
+    if get_total_bars() == 0:
+        logger.info("Database empty → Seeding stock data...")
+
         app.state.seeding = True
 
-        async def seed_job() -> None:
+        async def seed_job():
             try:
                 await asyncio.to_thread(seed_default_universe)
             finally:
                 app.state.seeding = False
 
         seed_task = asyncio.create_task(seed_job())
+
     yield
-    if seed_task is not None:
+
+    # Cleanup on shutdown
+    if seed_task:
         await seed_task
+
     api_cache.clear()
 
 
+# -------------------- FastAPI App --------------------
+
 app = FastAPI(
     title="Stock Data Intelligence API",
-    description="Mini financial data platform: cleaned NSE data, metrics, comparison, and ML demo.",
+    description="Stock analytics platform with metrics, comparison, and ML predictions.",
     version="1.0.0",
     lifespan=lifespan,
 )
+
+
+# -------------------- Middleware --------------------
 
 app.add_middleware(
     CORSMiddleware,
@@ -93,58 +115,58 @@ app.add_middleware(
 )
 
 
+# -------------------- APIs --------------------
+
 @app.get("/health")
-def health(request: Request):
+def health_check(request: Request):
     return {
         "status": "ok",
-        "bars": _count_bars(),
+        "total_records": get_total_bars(),
         "seeding": getattr(request.app.state, "seeding", False),
-        "seed": LAST_SEED_RESULT,
+        "last_seed": LAST_SEED_RESULT,
     }
 
 
 @app.get("/companies", tags=["companies"])
 def list_companies():
-    """List all available companies (from ingested universe)."""
-
-    def load():
-        return {"companies": _company_rows()}
-
-    return cached("companies", load)
+    """Get all available companies."""
+    return cached("companies", lambda: {"companies": get_all_companies()})
 
 
 @app.get("/data/{symbol}", tags=["data"])
 def get_stock_data(
     symbol: str,
-    days: int = Query(30, ge=1, le=365, description="Number of recent trading days"),
+    days: int = Query(30, ge=1, le=365),
 ):
-    """Last N calendar days of OHLCV and computed metrics (daily return, MA7, 52w range, volatility)."""
-    yf_sym = _resolve_yf_symbol(symbol)
-    start = datetime.utcnow() - timedelta(days=days + 60)
-    df = load_bars_dataframe(symbol, start=start)
+    """Get last N days stock data with metrics."""
+    yf_symbol = resolve_symbol(symbol)
+
+    start_date = datetime.utcnow() - timedelta(days=days + 60)
+    df = load_bars_dataframe(symbol, start=start_date)
+
     if df.empty:
-        raise HTTPException(404, f"No data for symbol {symbol}. Try /companies for valid tickers.")
+        raise HTTPException(404, f"No data found for {symbol}")
 
     df = df.sort_values("bar_date").tail(days)
+
     records = []
     for _, row in df.iterrows():
-        records.append(
-            {
-                "date": str(row["bar_date"].date()) if hasattr(row["bar_date"], "date") else str(row["bar_date"]),
-                "open": float(row["open"]),
-                "high": float(row["high"]),
-                "low": float(row["low"]),
-                "close": float(row["close"]),
-                "volume": float(row["volume"] or 0),
-                "daily_return": float(row["daily_return"]) if pd.notna(row["daily_return"]) else None,
-                "ma7": float(row["ma7"]) if pd.notna(row["ma7"]) else None,
-                "week52_high": float(row["week52_high"]) if pd.notna(row["week52_high"]) else None,
-                "week52_low": float(row["week52_low"]) if pd.notna(row["week52_low"]) else None,
-                "volatility": float(row["volatility"]) if pd.notna(row["volatility"]) else None,
-            }
-        )
+        records.append({
+            "date": str(row["bar_date"]),
+            "open": float(row["open"]),
+            "high": float(row["high"]),
+            "low": float(row["low"]),
+            "close": float(row["close"]),
+            "volume": float(row["volume"] or 0),
+            "daily_return": float(row["daily_return"]) if pd.notna(row["daily_return"]) else None,
+            "ma7": float(row["ma7"]) if pd.notna(row["ma7"]) else None,
+            "week52_high": float(row["week52_high"]) if pd.notna(row["week52_high"]) else None,
+            "week52_low": float(row["week52_low"]) if pd.notna(row["week52_low"]) else None,
+            "volatility": float(row["volatility"]) if pd.notna(row["volatility"]) else None,
+        })
+
     return {
-        "symbol": from_yfinance_symbol(yf_sym),
+        "symbol": from_yfinance_symbol(yf_symbol),
         "days": len(records),
         "data": records,
     }
@@ -152,138 +174,141 @@ def get_stock_data(
 
 @app.get("/summary/{symbol}", tags=["summary"])
 def get_summary(symbol: str):
-    """52-week high, low, and average close over all stored history."""
+    """Get stock summary."""
 
     def build():
-        yf_sym = _resolve_yf_symbol(symbol)
         df = load_bars_dataframe(symbol)
+
         if df.empty:
             raise HTTPException(404, f"No data for {symbol}")
-        last = df.sort_values("bar_date").iloc[-1]
-        # Prefer rolling 52-week metrics on last bar; fallback to range in history
-        hi = (
-            float(last["week52_high"])
-            if pd.notna(last["week52_high"])
-            else float(df["high"].tail(252).max())
-        )
-        lo = (
-            float(last["week52_low"])
-            if pd.notna(last["week52_low"])
-            else float(df["low"].tail(252).min())
-        )
-        avg_close = float(df["close"].mean())
+
+        df = df.sort_values("bar_date")
+        last = df.iloc[-1]
+
         return {
-            "symbol": from_yfinance_symbol(yf_sym),
-            "as_of": str(last["bar_date"]),
-            "week52_high": hi,
-            "week52_low": lo,
-            "average_close": avg_close,
+            "symbol": symbol,
             "last_close": float(last["close"]),
+            "average_close": float(df["close"].mean()),
+            "week52_high": float(df["high"].tail(252).max()),
+            "week52_low": float(df["low"].tail(252).min()),
             "latest_volatility": float(last["volatility"]) if pd.notna(last["volatility"]) else None,
         }
 
-    return cached(f"summary:{symbol.upper()}", build)
+    return cached(f"summary:{symbol}", build)
 
 
 @app.get("/compare", tags=["compare"])
 def compare_stocks(
-    symbol1: str = Query(..., description="First ticker, e.g. INFY"),
-    symbol2: str = Query(..., description="Second ticker, e.g. TCS"),
+    symbol1: str,
+    symbol2: str,
     days: int = Query(90, ge=10, le=365),
 ):
-    """Compare normalized performance and return correlation of returns (custom metric)."""
-    s1, s2 = symbol1.strip().upper(), symbol2.strip().upper()
-    df1 = load_bars_dataframe(s1)
-    df2 = load_bars_dataframe(s2)
+    """Compare two stocks."""
+
+    df1 = load_bars_dataframe(symbol1).tail(days)
+    df2 = load_bars_dataframe(symbol2).tail(days)
+
     if df1.empty or df2.empty:
-        raise HTTPException(404, "One or both symbols have no data.")
+        raise HTTPException(404, "Data missing")
 
-    df1 = df1.sort_values("bar_date").tail(days)
-    df2 = df2.sort_values("bar_date").tail(days)
-    merged = df1[["bar_date", "close"]].merge(
-        df2[["bar_date", "close"]], on="bar_date", suffixes=("_1", "_2")
-    )
+    merged = df1.merge(df2, on="bar_date", suffixes=("_1", "_2"))
+
     if merged.empty:
-        raise HTTPException(400, "No overlapping dates for comparison.")
-    merged = merged.sort_values("bar_date")
+        raise HTTPException(400, "No overlapping dates")
 
-    base1 = float(merged["close_1"].iloc[0])
-    base2 = float(merged["close_2"].iloc[0])
-    if base1 == 0 or base2 == 0:
-        raise HTTPException(400, "Invalid base prices.")
+    base1 = merged["close_1"].iloc[0]
+    base2 = merged["close_2"].iloc[0]
 
-    series = []
-    for _, r in merged.iterrows():
-        series.append(
-            {
-                "date": str(r["bar_date"].date()) if hasattr(r["bar_date"], "date") else str(r["bar_date"]),
-                "norm1": (float(r["close_1"]) / base1) * 100.0,
-                "norm2": (float(r["close_2"]) / base2) * 100.0,
-            }
-        )
-
-    corr = correlation_between(s1, s2, days=min(days, 120))
-    ret1 = (merged["close_1"].iloc[-1] / merged["close_1"].iloc[0] - 1.0) * 100.0
-    ret2 = (merged["close_2"].iloc[-1] / merged["close_2"].iloc[0] - 1.0) * 100.0
+    result = []
+    for _, row in merged.iterrows():
+        result.append({
+            "date": str(row["bar_date"]),
+            "norm1": (row["close_1"] / base1) * 100,
+            "norm2": (row["close_2"] / base2) * 100,
+        })
 
     return {
-        "symbol1": from_yfinance_symbol(to_yfinance_symbol(s1)),
-        "symbol2": from_yfinance_symbol(to_yfinance_symbol(s2)),
-        "period_days": len(merged),
-        "total_return_pct_symbol1": round(float(ret1), 4),
-        "total_return_pct_symbol2": round(float(ret2), 4),
-        "return_correlation": round(corr, 4) if corr is not None else None,
-        "series": series,
+        "symbol1": symbol1,
+        "symbol2": symbol2,
+        "correlation": correlation_between(symbol1, symbol2),
+        "series": result,
     }
 
 
 @app.get("/top-movers", tags=["insights"])
-def top_movers(days: int = Query(30, ge=1, le=90)):
-    """Top gainers and losers by close-to-close return over the window."""
+def top_movers(days: int = 30):
+    """Top gainers and losers."""
+
     with get_connection() as conn:
-        symbols = [r["symbol"] for r in conn.execute("SELECT symbol FROM companies").fetchall()]
-    movers: list[tuple[str, float]] = []
+        symbols = [row["symbol"] for row in conn.execute("SELECT symbol FROM companies")]
+
+    results = []
+
     for sym in symbols:
-        df = load_bars_dataframe(from_yfinance_symbol(sym))
-        if df.empty or len(df) < 2:
-            continue
-        df = df.sort_values("bar_date").tail(days + 1)
+        df = load_bars_dataframe(sym).tail(days)
+
         if len(df) < 2:
             continue
-        first, last = float(df["close"].iloc[0]), float(df["close"].iloc[-1])
-        if first == 0:
-            continue
-        pct = (last / first - 1.0) * 100.0
-        movers.append((from_yfinance_symbol(sym), pct))
-    movers.sort(key=lambda x: x[1], reverse=True)
+
+        change = (df["close"].iloc[-1] / df["close"].iloc[0] - 1) * 100
+        results.append((sym, change))
+
+    results.sort(key=lambda x: x[1], reverse=True)
+
     return {
-        "days": days,
-        "top_gainers": [{"symbol": s, "return_pct": round(p, 4)} for s, p in movers[:5]],
-        "top_losers": [{"symbol": s, "return_pct": round(p, 4)} for s, p in movers[-5:][::-1]],
+        "top_gainers": results[:5],
+        "top_losers": results[-5:],
     }
 
 
 @app.get("/predict/{symbol}", tags=["ml"])
-def predict_price(symbol: str, days: int = Query(60, ge=20, le=365)):
-    """Linear regression on pre-April history; extrapolate April + May business days (demo, not financial advice)."""
+def predict(symbol: str):
+    """Predict future prices."""
+
     df = load_bars_dataframe(symbol)
+
     if df.empty:
-        raise HTTPException(404, f"No data for {symbol}")
-    df = df.sort_values("bar_date")
-    df["bar_date"] = pd.to_datetime(df["bar_date"]).dt.normalize()
+        raise HTTPException(404, "No data")
 
-    year = date.today().year
-    april_start = pd.Timestamp(year=year, month=4, day=1)
-    april_end = pd.Timestamp(year=year, month=4, day=30)
-    may_start = pd.Timestamp(year=year, month=5, day=1)
-    may_end = pd.Timestamp(year=year, month=5, day=31)
-    april_bdays = pd.bdate_range(april_start, april_end)
-    may_bdays = pd.bdate_range(may_start, may_end)
-    n_apr, n_may = len(april_bdays), len(may_bdays)
-    horizon = n_apr + n_may
+    closes = df["close"].values
 
-    train_df = df[df["bar_date"] < april_start].tail(days)
-    if len(train_df) < 5:
+    fitted, future = predict_next_closes(closes, horizon=40)
+
+    return {
+        "symbol": symbol,
+        "predicted": future.tolist(),
+        "fitted": fitted.tolist(),
+        "note": "Demo only",
+    }
+
+
+@app.post("/admin/refresh/{symbol}", tags=["admin"])
+def refresh(symbol: str):
+    """Refresh stock data."""
+    api_cache.clear()
+
+    rows = ingest_symbol(symbol)
+
+    if rows == 0:
+        raise HTTPException(400, "Failed to fetch data")
+
+    return {"symbol": symbol, "rows_updated": rows}
+
+
+# -------------------- Static Files --------------------
+
+if STATIC_DIR.is_dir():
+    app.mount("/assets", StaticFiles(directory=STATIC_DIR), name="assets")
+
+
+@app.get("/")
+def home():
+    index_file = STATIC_DIR / "index.html"
+
+    if index_file.exists():
+        return FileResponse(index_file)
+
+    return {"message": "API is running "}in_df) < 5:
         raise HTTPException(
             400,
             f"Need at least 5 daily bars before April {year}; got {len(train_df)}. Try more history or refresh data.",
