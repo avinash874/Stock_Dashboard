@@ -22,14 +22,15 @@ ChartJS.register(
 );
 
 // No trailing slash — we join paths like `/companies`
-const apiBase = (import.meta.env.production.VITE_API_BASE ?? "").replace(/\/$/, "");
+// Vite exposes only VITE_* keys on import.meta.env (see .env.production for production builds)
+const apiBase = String(import.meta.env.VITE_API_BASE ?? "").replace(/\/$/, "");
 
 // Swagger lives on the API host when the UI is on Vercel and the API is on Render
 const docsUrl = apiBase ? `${apiBase}/docs` : "/docs";
 
-// Production UI on Vercel (override with VITE_APP_LIVE_URL)
+// Public URL of this UI (footer link). Not the API URL.
 const LIVE_APP_URL =
-  import.meta.env.production.VITE_API_BASE || "https://stock-dashboard-1-0qoi.onrender.com/";
+  import.meta.env.VITE_APP_LIVE_URL ?? "https://stock-dashboard-tawny-nine.vercel.app";
 
 async function fetchJSON(path) {
   const url = `${apiBase}${path}`;
