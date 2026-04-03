@@ -21,9 +21,13 @@ ChartJS.register(
   Filler
 );
 
-const apiBase = import.meta.env.VITE_API_BASE ?? "";
+// No trailing slash — we join paths like `/companies`
+const apiBase = (import.meta.env.VITE_API_BASE ?? "").replace(/\/$/, "");
 
-// Production UI on Vercel (change in .env with VITE_APP_LIVE_URL if you use another domain)
+// Swagger lives on the API host when the UI is on Vercel and the API is on Render
+const docsUrl = apiBase ? `${apiBase}/docs` : "/docs";
+
+// Production UI on Vercel (override with VITE_APP_LIVE_URL)
 const LIVE_APP_URL =
   import.meta.env.VITE_APP_LIVE_URL || "https://stock-dashboard-tawny-nine.vercel.app";
 
@@ -505,8 +509,8 @@ export default function App() {
           >
             Live app (Vercel)
           </a>
-          <a className="text-accent hover:underline" href="/docs" target="_blank" rel="noreferrer">
-            Swagger UI
+          <a className="text-accent hover:underline" href={docsUrl} target="_blank" rel="noreferrer">
+            Swagger UI (API)
           </a>
         </div>
       </footer>
