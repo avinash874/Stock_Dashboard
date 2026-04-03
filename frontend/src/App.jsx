@@ -23,6 +23,10 @@ ChartJS.register(
 
 const apiBase = import.meta.env.VITE_API_BASE ?? "";
 
+// Production UI on Vercel (change in .env with VITE_APP_LIVE_URL if you use another domain)
+const LIVE_APP_URL =
+  import.meta.env.VITE_APP_LIVE_URL || "https://stock-dashboard-tawny-nine.vercel.app";
+
 async function fetchJSON(path) {
   const url = `${apiBase}${path}`;
   const r = await fetch(url);
@@ -490,11 +494,21 @@ export default function App() {
         </main>
       </div>
 
-      <footer className="border-t border-line px-4 py-3 text-xs text-muted flex flex-wrap gap-4 justify-between">
+      <footer className="border-t border-line px-4 py-3 text-xs text-muted flex flex-wrap gap-4 items-center justify-between">
         <span>Educational demo — not investment advice.</span>
-        <a className="text-accent hover:underline" href="/docs" target="_blank" rel="noreferrer">
-          Swagger UI
-        </a>
+        <div className="flex flex-wrap gap-x-4 gap-y-2">
+          <a
+            className="text-accent hover:underline"
+            href={LIVE_APP_URL}
+            target="_blank"
+            rel="noreferrer"
+          >
+            Live app (Vercel)
+          </a>
+          <a className="text-accent hover:underline" href="/docs" target="_blank" rel="noreferrer">
+            Swagger UI
+          </a>
+        </div>
       </footer>
     </div>
   );

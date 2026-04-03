@@ -87,6 +87,8 @@ Then open http://127.0.0.1:8000/ — FastAPI serves files from `frontend/dist/`.
 
 Optional: copy `frontend/.env.example` to `frontend/.env` and set `VITE_API_BASE` if the UI is hosted on a **different** origin than the API.
 
+**Vercel deploy (UI):** [stock-dashboard-tawny-nine.vercel.app](https://stock-dashboard-tawny-nine.vercel.app/) — in the Vercel project settings, add **`VITE_API_BASE`** (and optionally **`VITE_APP_LIVE_URL`**) so the browser can reach your FastAPI backend.
+
 ## Postman
 
 Import `postman_collection.json` from the repo root and point `base` at your API URL (e.g. `http://127.0.0.1:8000`).
