@@ -1,4 +1,3 @@
-"""Tiny TTL cache for API responses."""
 from __future__ import annotations
 
 import time
@@ -10,6 +9,8 @@ T = TypeVar("T")
 
 
 class TTLCache:
+    """Remember (key -> value) for a while, then forget. Stops the API from hammering SQLite."""
+
     def __init__(self, ttl_seconds: int = CACHE_TTL_SECONDS) -> None:
         self.ttl = ttl_seconds
         self._store: dict[str, tuple[float, Any]] = {}
@@ -17,11 +18,11 @@ class TTLCache:
     def get(self, key: str) -> Any | None:
         if key not in self._store:
             return None
-        ts, val = self._store[key]
-        if time.time() - ts > self.ttl:
+        saved_at, value = self._store[key]
+        if time.time() - saved_at > self.ttl:
             del self._store[key]
             return None
-        return val
+        return value
 
     def set(self, key: str, value: Any) -> None:
         self._store[key] = (time.time(), value)
@@ -34,9 +35,9 @@ api_cache = TTLCache()
 
 
 def cached(key: str, factory: Callable[[], T]) -> T:
-    hit = api_cache.get(key)
-    if hit is not None:
-        return hit  # type: ignore[return-value]
-    val = factory()
-    api_cache.set(key, val)
-    return val
+    previous = api_cache.get(key)
+    if previous is not None:
+        return previous  # type: ignore[return-value]
+    fresh = factory()
+    api_cache.set(key, fresh)
+    return fresh

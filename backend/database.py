@@ -1,7 +1,5 @@
-"""SQLite persistence for cleaned stock data."""
 import sqlite3
 from contextlib import contextmanager
-from pathlib import Path
 from typing import Any, Generator
 
 from config import DB_PATH, DATA_DIR
@@ -59,4 +57,4 @@ def init_db() -> None:
 
 
 def row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
-    return {k: row[k] for k in row.keys()}
+    return {key: row[key] for key in row.keys()}

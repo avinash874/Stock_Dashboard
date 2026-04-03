@@ -1,99 +1,105 @@
-# Stock Data Intelligence Dashboard (JarNox internship)
+# Stock Data Intelligence Dashboard (JarNox)
 
-A small **end-to-end** demo: pull **NSE** daily prices with **yfinance**, clean and enrich them with **Pandas**, persist to **SQLite**, expose **FastAPI** REST endpoints (with **Swagger**), and serve a **Chart.js** dashboard for exploration.
+End-to-end demo: **NSE** daily prices via **yfinance**, **Pandas** cleaning + metrics, **SQLite** storage, **FastAPI** REST API, and a **React + Tailwind** dashboard (Chart.js under the hood).
 
-> This is a learning/demo project. Prices and any “ML” output are **not** investment advice.
+> Learning/demo only. Prices and any “ML” output are **not** investment advice.
+
+## Repo layout
+
+| Path | What lives there |
+| --- | --- |
+| `backend/` | Python: FastAPI app, data pipeline, SQLite, ML helper |
+| `frontend/` | React (Vite) + Tailwind UI; `npm run build` outputs `frontend/dist/` |
+| `postman_collection.json` | API collection (repo root) |
+| `.gitignore` | Python, SQLite data dirs, Node, OS noise |
+
+SQLite file (after you run the backend): `backend/data_store/stocks.db`.
 
 ## Tech stack
 
 | Layer | Choice |
 | --- | --- |
-| **Language** | Python |
-| **Backend** | FastAPI (REST + OpenAPI/Swagger) |
-| **Database** | SQLite (file `data_store/stocks.db`; PostgreSQL can be used as a drop-in alternative with schema migration if needed) |
-| **Data / ML** | Pandas, NumPy, scikit-learn (linear regression demo), **yfinance** for market data (uses HTTP under the hood) |
-| **Frontend (bonus)** | HTML + static **Chart.js** (`static/`) |
+| **Backend** | Python 3, FastAPI, SQLite |
+| **Data / ML** | Pandas, NumPy, scikit-learn (linear regression demo), yfinance |
+| **Frontend** | React 18, Vite 6, Tailwind CSS 3, Chart.js (via `react-chartjs-2`) |
 
-No Docker — run locally with Python + `venv` (see Quick start below).
+No Docker in this repo — run backend + frontend dev server locally.
 
-## What this project does
+## Backend API
 
-### Data collection and preparation
-
-- Downloads ~2 years of daily OHLCV for a fixed universe of liquid **NSE** tickers (`.NS` suffix for yfinance).
-- Cleans data: numeric coercion, missing-value handling, sorted calendar dates.
-- Computes metrics:
-  - **Daily return**: \((\text{close} - \text{open}) / \text{open}\)
-  - **7-day moving average** of close
-  - **52-week high / low** using a 252-trading-day rolling window on highs/lows
-  - **Custom metric — annualized volatility**: rolling std of log returns (7 sessions) × \(\sqrt{252}\)
-- Stores one row per `(symbol, date)` in SQLite (`data_store/stocks.db`).
-
-### Backend API (FastAPI)
-
-Interactive docs: run the server and open `/docs`.
+With the server running, open **`/docs`** for Swagger.
 
 | Endpoint | Description |
 | --- | --- |
-| `GET /companies` | All symbols in the local universe |
-| `GET /data/{symbol}?days=30` | Recent bars with OHLCV + metrics |
-| `GET /summary/{symbol}` | 52-week high/low (from latest rolling metrics), average close, last close, latest volatility |
-| `GET /compare?symbol1=INFY&symbol2=TCS&days=90` | Normalized performance + **return correlation** (custom insight) |
-| `GET /top-movers?days=30` | Simple gainers/losers over the window |
-| `GET /predict/{symbol}?days=60` | **Bonus**: sklearn `LinearRegression` on pre-April bars + Apr + May (business-day) forecast (demo only) |
-| `POST /admin/refresh/{symbol}` | Re-download one symbol (clears the tiny API cache) |
+| `GET /companies` | Symbols in the local universe |
+| `GET /data/{symbol}?days=30` | OHLCV + metrics |
+| `GET /summary/{symbol}` | 52w-style high/low, averages, last close, volatility |
+| `GET /compare?symbol1=&symbol2=&days=` | Normalized lines + return correlation |
+| `GET /top-movers?days=30` | Simple gainers/losers |
+| `GET /predict/{symbol}?days=60` | Toy linear extrapolation (demo) |
+| `POST /admin/refresh/{symbol}` | Re-fetch one symbol (clears small API cache) |
 
-**Caching:** responses for `/companies` and `/summary/{symbol}` are cached in-memory for `CACHE_TTL_SECONDS` (default **120s**) to reduce repeated heavy reads.
+**Caching:** `/companies` and `/summary/{symbol}` use an in-memory TTL cache (`CACHE_TTL_SECONDS`, default **120**).
 
-### Dashboard (static)
+## Quick start
 
-`static/index.html` (served at `/`) includes:
-
-- Left-hand company list with search
-- Close price chart (+ optional **7d MA**)
-- Range filter (**30 / 90** days) and **Top movers**
-- Optional **ML trend** overlay (linear fit + short extrapolation)
-- **Compare** mode (normalized lines + correlation shown in subtitle)
-
-## Quick start (local)
+### 1) Backend
 
 ```bash
-cd project_JarNox
+cd backend
 python3 -m venv .venv
-source .venv/bin/activate
+source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 uvicorn main:app --reload --host 127.0.0.1 --port 8000
 ```
 
-- API + Swagger: `http://127.0.0.1:8000/docs`
-- Dashboard: `http://127.0.0.1:8000/`
+- API + Swagger: http://127.0.0.1:8000/docs  
+- If `frontend/dist/` **exists** (after step 2), the dashboard is at http://127.0.0.1:8000/  
+- If you have **not** built the frontend yet, `GET /` returns a short JSON hint.
 
-**First boot note:** if `data_store/stocks.db` is missing/empty, the app **downloads and ingests** all default tickers on startup (typically ~1–3 minutes depending on network).
+**First boot:** empty DB triggers a **background** download of the default ticker list (often ~1–3 minutes, depends on Yahoo + throttling).
+
+### 2) Frontend (development)
+
+Use a **second terminal** while the backend stays on port **8000**:
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+- UI: http://127.0.0.1:5173  
+- Vite proxies API paths (`/companies`, `/data`, …) to `http://127.0.0.1:8000`.
+
+### 3) Frontend (production build — same origin as API)
+
+```bash
+cd frontend
+npm install
+npm run build
+cd ../backend
+source .venv/bin/activate
+uvicorn main:app --host 127.0.0.1 --port 8000
+```
+
+Then open http://127.0.0.1:8000/ — FastAPI serves files from `frontend/dist/`.
+
+Optional: copy `frontend/.env.example` to `frontend/.env` and set `VITE_API_BASE` if the UI is hosted on a **different** origin than the API.
 
 ## Postman
 
-Import `postman_collection.json` and set `base` to your server URL.
-
-## Repository layout
-
-- `main.py` — FastAPI app, routing, caching, static dashboard
-- `data_service.py` — yfinance ingestion + SQLite upserts
-- `data_processor.py` — cleaning + derived metrics
-- `database.py` — SQLite schema
-- `ml_predict.py` — simple regression helper
-- `static/` — dashboard assets
-- `yf_client.py` — throttled yfinance fetches with retries
-
-## Ideas for “insights” you can mention in your write-up
-
-When presenting the assignment, good narrative angles are:
-
-- **Volatility vs trend**: high volatility with flat prices often implies noisy, event-driven trading; combine with moving averages to describe regime shifts.
-- **Correlation** (from `/compare`): quantify diversification — high correlation means less independent risk reduction when pairing names.
-- **Top movers**: highlight sector rotation or idiosyncratic moves, but treat short windows cautiously (noise dominates).
+Import `postman_collection.json` from the repo root and point `base` at your API URL (e.g. `http://127.0.0.1:8000`).
 
 ## Troubleshooting
 
-- **`pip` downloads time out:** retry with `export PIP_DEFAULT_TIMEOUT=300` or `pip install --no-cache-dir -r requirements.txt`.
-- **Stale data:** call `POST /admin/refresh/{SYMBOL}` or delete `data_store/` to force a rebuild on next boot.
-- **yfinance outages:** symptoms include empty frames during ingest; the API will return 404s for affected symbols until refresh succeeds.
+- **Port already in use:** stop the old uvicorn or use `--port 8001`.
+- **Blank `/` after deploy:** run `npm run build` in `frontend/` so `frontend/dist/` exists.
+- **Stale prices:** `POST /admin/refresh/{SYMBOL}` or delete `backend/data_store/` and restart (forces re-seed if empty).
+- **Old layout:** if you still have `data_store/` at the **repo root** from an earlier version, the app now uses `backend/data_store/`; you can remove the old folder or move the `.db` file if you want to keep data.
+
+## Presentation angles (write-up)
+
+- **Volatility vs trend:** noisy flat ranges vs smoother trends; pair with the 7-day MA.
+- **Correlation (`/compare`):** high correlation → less diversification between two names.
+- **Top movers:** short windows are noisy; use as a conversation starter, not a signal.

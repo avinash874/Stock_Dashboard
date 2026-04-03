@@ -1,4 +1,3 @@
-"""Fetch stock data via yfinance and persist to SQLite."""
 from __future__ import annotations
 
 import logging
@@ -26,7 +25,7 @@ from yf_client import (
 
 logger = logging.getLogger(__name__)
 
-# Last seed run summary (for /health and ops)
+# Filled in when we bulk-download tickers at startup — /health reads this
 LAST_SEED_RESULT: dict[str, Any] = {
     "status": "idle",
     "ingested_ok": 0,
@@ -55,7 +54,7 @@ def count_bars_for_symbol(display_symbol: str) -> int:
 
 
 def ingest_symbol(display_symbol: str) -> int:
-    """Download, clean, compute metrics, upsert rows. Returns row count."""
+    """Pull history from Yahoo, clean it, save. Returns how many daily rows we wrote."""
     yf_sym = to_yfinance_symbol(display_symbol)
     raw = fetch_history_with_retry(yf_sym)
     if raw.empty:
@@ -65,11 +64,11 @@ def ingest_symbol(display_symbol: str) -> int:
     if cleaned.empty:
         return 0
 
-    enriched = add_metrics(cleaned)
+    with_metrics = add_metrics(cleaned)
     ticker = yf.Ticker(yf_sym)
-    long_name = company_name_from_ticker(ticker, display_symbol)
+    company_name = company_name_from_ticker(ticker, display_symbol)
 
-    rows = 0
+    rows_written = 0
     with get_connection() as conn:
         conn.execute(
             """
@@ -79,10 +78,10 @@ def ingest_symbol(display_symbol: str) -> int:
                 name = excluded.name,
                 display_symbol = excluded.display_symbol
             """,
-            (yf_sym, from_yfinance_symbol(yf_sym), long_name),
+            (yf_sym, from_yfinance_symbol(yf_sym), company_name),
         )
 
-        for _, row in enriched.iterrows():
+        for _, row in with_metrics.iterrows():
             d = row["date"]
             if hasattr(d, "strftime"):
                 date_str = d.strftime("%Y-%m-%d")
@@ -122,13 +121,13 @@ def ingest_symbol(display_symbol: str) -> int:
                     float(row["volatility"]) if pd.notna(row["volatility"]) else None,
                 ),
             )
-            rows += 1
+            rows_written += 1
 
-    return rows
+    return rows_written
 
 
-def _run_ingest_safe(display_symbol: str) -> tuple[int, bool]:
-    """Returns (rows, ok). Never raises."""
+def try_ingest_one(display_symbol: str) -> tuple[int, bool]:
+    """Returns (rows_written, worked). Swallows errors so one bad ticker doesn't kill the batch."""
     try:
         n = ingest_symbol(display_symbol)
         return n, n > 0
@@ -138,114 +137,114 @@ def _run_ingest_safe(display_symbol: str) -> tuple[int, bool]:
 
 
 def seed_default_universe() -> None:
-    """
-    Ingest default NSE list with throttling, batching, retries, and a final retry pass.
-    Skips symbols that already have enough rows in DB. One failure does not stop others.
-    """
+    """Download our default list of NSE stocks. Slow on purpose — we pause between Yahoo calls."""
     global LAST_SEED_RESULT
 
-    pending: list[str] = []
-    skipped_db = 0
+    need_fetch: list[str] = []
+    skipped_already_full = 0
     for sym in DEFAULT_NSE_SYMBOLS:
         if count_bars_for_symbol(sym) >= YF_MIN_BARS_SKIP_SEED:
-            skipped_db += 1
-            logger.info("Seed skip %s — already have >= %s bars in DB", sym, YF_MIN_BARS_SKIP_SEED)
+            skipped_already_full += 1
+            logger.info("Skip %s — already have %s+ bars", sym, YF_MIN_BARS_SKIP_SEED)
         else:
-            pending.append(sym)
+            need_fetch.append(sym)
 
-    if not pending:
+    if not need_fetch:
         LAST_SEED_RESULT = {
             "status": "done",
             "ingested_ok": 0,
-            "skipped_db": skipped_db,
+            "skipped_db": skipped_already_full,
             "failed": [],
         }
-        logger.info("Seed: nothing to fetch (all symbols skipped or empty list).")
+        logger.info("Nothing to download (everything skipped or empty list).")
         return
 
     LAST_SEED_RESULT = {
         "status": "running",
         "ingested_ok": 0,
-        "skipped_db": skipped_db,
+        "skipped_db": skipped_already_full,
         "failed": [],
     }
 
-    failed: list[str] = []
-    ok_count = 0
-    batch = max(1, YF_BATCH_SIZE)
+    failed_symbols: list[str] = []
+    success_count = 0
+    batch_size = max(1, YF_BATCH_SIZE)
 
-    def process_list(symbols: list[str], phase: str) -> None:
-        nonlocal ok_count, failed
+    def run_through(symbols: list[str], label: str) -> None:
+        nonlocal success_count, failed_symbols
         for i, sym in enumerate(symbols):
             if i > 0:
-                if i % batch == 0:
+                if i % batch_size == 0:
                     sleep_between_batches(YF_BATCH_PAUSE_SEC)
                 else:
                     sleep_between_symbols()
-            n, success = _run_ingest_safe(sym)
-            if success:
-                ok_count += 1
-                LAST_SEED_RESULT["ingested_ok"] = ok_count
-                logger.info("[%s] Ingested %s: %s rows", phase, sym, n)
+
+            rows, ok = try_ingest_one(sym)
+            if ok:
+                success_count += 1
+                LAST_SEED_RESULT["ingested_ok"] = success_count
+                logger.info("[%s] %s — saved %s rows", label, sym, rows)
             else:
-                if sym not in failed:
-                    failed.append(sym)
-                logger.error("[%s] Failed or empty ingest for %s", phase, sym)
+                if sym not in failed_symbols:
+                    failed_symbols.append(sym)
+                logger.error("[%s] %s — no data or error", label, sym)
 
-    process_list(pending, "phase1")
+    run_through(need_fetch, "round1")
 
-    if failed:
-        logger.warning("Retrying %s symbols after cooldown: %s", len(failed), failed)
+    if failed_symbols:
+        logger.warning("Retrying %s tickers after a longer pause: %s", len(failed_symbols), failed_symbols)
         sleep_between_batches(max(YF_BATCH_PAUSE_SEC, 8.0))
-        retry_syms = failed[:]
-        failed = []
-        process_list(retry_syms, "retry")
+        retry_list = failed_symbols[:]
+        failed_symbols = []
+        run_through(retry_list, "retry")
 
     LAST_SEED_RESULT = {
         "status": "done",
-        "ingested_ok": ok_count,
-        "skipped_db": skipped_db,
-        "failed": failed,
+        "ingested_ok": success_count,
+        "skipped_db": skipped_already_full,
+        "failed": failed_symbols,
     }
-    if failed:
-        logger.error("Seed finished with unresolved failures: %s", failed)
+    if failed_symbols:
+        logger.error("Still failed after retry: %s", failed_symbols)
     else:
-        logger.info("Seed finished: ok=%s skipped_db=%s", ok_count, skipped_db)
+        logger.info("Seed done: ok=%s skipped=%s", success_count, skipped_already_full)
 
 
 def load_bars_dataframe(symbol: str, start: datetime | None = None) -> pd.DataFrame:
     yf_sym = to_yfinance_symbol(symbol)
     with get_connection() as conn:
         if start:
-            q = (
+            sql = (
                 "SELECT * FROM stock_bars WHERE symbol = ? AND bar_date >= ? ORDER BY bar_date"
             )
-            df = pd.read_sql_query(q, conn, params=(yf_sym, start.strftime("%Y-%m-%d")))
+            df = pd.read_sql_query(sql, conn, params=(yf_sym, start.strftime("%Y-%m-%d")))
         else:
-            q = "SELECT * FROM stock_bars WHERE symbol = ? ORDER BY bar_date"
-            df = pd.read_sql_query(q, conn, params=(yf_sym,))
+            sql = "SELECT * FROM stock_bars WHERE symbol = ? ORDER BY bar_date"
+            df = pd.read_sql_query(sql, conn, params=(yf_sym,))
     if not df.empty and "bar_date" in df.columns:
         df["bar_date"] = pd.to_datetime(df["bar_date"])
     return df
 
 
-def correlation_between(s1: str, s2: str, days: int = 90) -> float | None:
-    """Pearson correlation of daily close-to-close returns over last `days` bars."""
+def correlation_between(stock_a: str, stock_b: str, days: int = 90) -> float | None:
+    """How similarly the two stocks move day to day (-1 to 1). Needs enough overlapping dates."""
     start = datetime.utcnow() - timedelta(days=days * 2)
-    a = load_bars_dataframe(s1, start=start)
-    b = load_bars_dataframe(s2, start=start)
+    a = load_bars_dataframe(stock_a, start=start)
+    b = load_bars_dataframe(stock_b, start=start)
     if a.empty or b.empty:
         return None
+
     a = a.sort_values("bar_date").tail(days)
     b = b.sort_values("bar_date").tail(days)
-    merged = a[["bar_date", "close"]].merge(
+    both = a[["bar_date", "close"]].merge(
         b[["bar_date", "close"]], on="bar_date", suffixes=("_a", "_b")
     )
-    if len(merged) < 10:
+    if len(both) < 10:
         return None
-    ra = merged["close_a"].pct_change().dropna()
-    rb = merged["close_b"].pct_change().dropna()
-    aligned = pd.concat([ra, rb], axis=1, join="inner").dropna()
-    if len(aligned) < 5:
+
+    ret_a = both["close_a"].pct_change().dropna()
+    ret_b = both["close_b"].pct_change().dropna()
+    together = pd.concat([ret_a, ret_b], axis=1, join="inner").dropna()
+    if len(together) < 5:
         return None
-    return float(aligned.iloc[:, 0].corr(aligned.iloc[:, 1]))
+    return float(together.iloc[:, 0].corr(together.iloc[:, 1]))
