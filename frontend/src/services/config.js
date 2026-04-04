@@ -6,4 +6,4 @@ export const apiBase = String(import.meta.env.VITE_API_BASE ?? "").replace(/\/$/
 export const docsUrl = apiBase ? `${apiBase}/docs` : "/docs";
 
 export const liveAppUrl =
-  import.meta.env.VITE_APP_LIVE_URL ?? "https://stock-dashboard-tawny-nine.vercel.app";
+  import.meta.env.VITE_APP_LIVE_URL ?? "https://stock-dashboard-1-0qoi.onrender.com";
