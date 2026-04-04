@@ -87,7 +87,7 @@ Then open http://127.0.0.1:8000/ — FastAPI serves files from `frontend/dist/`.
 
 Optional: copy `frontend/.env.example` to `frontend/.env` and set `VITE_API_BASE` if the UI is hosted on a **different** origin than the API.
 
-**Vercel (frontend) + Render (API):** Production builds read **`frontend/.env.production`**, which sets **`VITE_API_BASE=https://stock-dashboard-1-0qoi.onrender.com`**, so charts and lists call your Render FastAPI. You can override that value in Vercel → **Settings → Environment Variables** if the API URL changes. Set the Vercel project **Root Directory** to **`frontend`**, **Build Command** to `npm run build`, **Output Directory** to **`dist`**. Example UI: [stock-dashboard-tawny-nine.vercel.app](https://stock-dashboard-tawny-nine.vercel.app/).
+**Vercel (frontend) + Render (API):** If `VITE_API_BASE` is not set at build time, the UI still uses the Render API URL baked into **`frontend/src/services/config.js`** (so requests do not go to `*.vercel.app/companies` and 404). Optional: commit **`frontend/.env.production`** or set **`VITE_API_BASE`** in Vercel → Environment Variables to point at another backend. Vercel: **Root Directory** `frontend`, **Build** `npm run build`, **Output** `dist`. Example UI: [stock-dashboard-tawny-nine.vercel.app](https://stock-dashboard-tawny-nine.vercel.app/).
 
 ## Postman
 

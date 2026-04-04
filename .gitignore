@@ -12,6 +12,7 @@ backend/__pycache__/
 .env
 .env.*
 !.env.example
+!frontend/.env.production
 
 # App data (SQLite)
 data_store/
